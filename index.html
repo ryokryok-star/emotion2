@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>感情ラベリング</title>
+    <!-- Tailwind CSS（簡易CDN版の「本番では使わない」警告のみ非表示） -->
+    <script>
+        (function () {
+            const origWarn = console.warn.bind(console);
+            console.warn = function (...args) {
+                if (typeof args[0] === 'string' && args[0].indexOf('cdn.tailwindcss.com should not be used in production') !== -1) return;
+                origWarn(...args);
+            };
+        })();
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        iosBg: '#F2F2F7',
+                        iosCard: '#FFFFFF',
+                        iosPrimary: '#007AFF',
+                        iosSecondary: '#8E8E93',
+                        iosBorder: '#E5E5EA',
+                    },
+                    fontFamily: {
+                        sans: ['Noto Sans JP', 'Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #F2F2F7;
+            font-family: 'Noto Sans JP', 'Inter', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #D1D1D6;
+            border-radius: 2px;
+        }
+        .ios-shadow {
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+        }
+        /* 選択時の強力なハイライト（濃い青枠＋アクセント影） */
+        .emotion-card-selected {
+            border: 2px solid #007AFF !important;
+            box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.25);
+            transform: scale(1.01);
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+    </style>
+</head>
+<body class="text-gray-800 antialiased pb-24 md:pb-8">
+
+    <div id="app" class="max-w-md mx-auto min-h-screen bg-iosBg flex flex-col relative shadow-xl min-w-[320px]">
+        
+        <!-- Header -->
+        <header class="sticky top-0 z-20 bg-iosBg/85 backdrop-blur-md border-b border-iosBorder px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <i data-lucide="tag" class="w-5 h-5 text-iosPrimary"></i>
+                <h1 class="font-bold text-lg text-gray-900 tracking-tight">感情ラベリング</h1>
+            </div>
+            <div class="text-xs text-iosSecondary font-medium">プルチックモデル</div>
+        </header>
+
+        <!-- MAIN VIEW: 記録 (RECORD) -->
+        <main id="view-record" class="flex-1 p-4 space-y-4 overflow-y-auto">
+
+            <div class="bg-white rounded-2xl p-4 border border-iosBorder ios-shadow">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="timer" class="w-5 h-5 text-iosPrimary animate-pulse"></i>
+                        <span class="font-bold text-iosPrimary text-base">90秒タイマー</span>
+                        <span class="text-xs text-gray-400 font-normal">（感情の波が過ぎるのを待つ）</span>
+                    </div>
+                </div>
+                
+                <div class="flex items-center justify-between mt-3 bg-blue-50/60 rounded-xl p-3">
+                    <div class="text-3xl font-extrabold text-iosPrimary tracking-wider font-mono pl-2" id="timer-display">
+                        01:30
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="btn-timer-toggle" onclick="toggleTimer()" class="px-4 py-2 bg-iosPrimary text-white rounded-lg font-semibold text-sm hover:bg-blue-600 transition flex items-center gap-1 shadow-sm">
+                            <i data-lucide="play" class="w-4 h-4" id="timer-btn-icon"></i>
+                            <span id="timer-btn-text">スタート</span>
+                        </button>
+                        <button onclick="resetTimer()" class="p-2 text-gray-500 hover:text-gray-700 rounded-lg bg-white border border-iosBorder shadow-sm">
+                            <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="w-full bg-gray-100 rounded-full h-1.5 mt-3 overflow-hidden">
+                    <div id="timer-progress" class="bg-iosPrimary h-1.5 rounded-full transition-all duration-300" style="width: 100%"></div>
+                </div>
+            </div>
+
+            <div class="flex bg-gray-200/80 p-1 rounded-xl text-xs font-semibold">
+                <button id="tab-mode-wizard" onclick="switchMode('wizard')" class="flex-1 py-2 rounded-lg bg-white shadow-sm text-gray-900 transition flex items-center justify-center gap-1.5">
+                    <i data-lucide="help-circle" class="w-3.5 h-3.5"></i>質問で絞り込む
+                </button>
+                <button id="tab-mode-grid" onclick="switchMode('grid')" class="flex-1 py-2 rounded-lg text-gray-500 transition flex items-center justify-center gap-1.5">
+                    <i data-lucide="grid" class="w-3.5 h-3.5"></i>全感情一覧
+                </button>
+                <button id="tab-mode-wheel" onclick="switchMode('wheel')" class="flex-1 py-2 rounded-lg text-gray-500 transition flex items-center justify-center gap-1.5">
+                    <i data-lucide="flower-2" class="w-3.5 h-3.5"></i>感情の輪
+                </button>
+            </div>
+
+            <div id="mode-wizard" class="space-y-4">
+                
+                <div class="flex justify-between items-center px-1 text-xs text-gray-500 font-medium">
+                    <span id="wizard-step-indicator" class="text-iosPrimary font-bold">Step 1 / 3</span>
+                    <button id="btn-wizard-back" onclick="wizardBack()" class="text-iosPrimary hidden flex items-center gap-0.5 hover:underline">
+                        <i data-lucide="chevron-left" class="w-4 h-4"></i>戻る
+                    </button>
+                </div>
+
+                <!-- Wizard Step 1 -->
+                <div id="wizard-step-1" class="bg-white rounded-2xl p-4 border border-iosBorder ios-shadow space-y-3">
+                    <h2 class="font-bold text-gray-800 text-sm flex items-center gap-1.5">
+                        <i data-lucide="compass" class="w-4 h-4 text-gray-800"></i>
+                        【Step 1】いまの気分の方向性は？
+                    </h2>
+                    <div class="grid grid-cols-1 gap-2.5 pt-1">
+                        <button onclick="wizardSelectStep1('positive')" class="w-full p-4 rounded-xl border border-yellow-200 bg-yellow-50/40 hover:bg-yellow-50 text-left transition flex items-center justify-between group">
+                            <div class="flex items-center gap-3">
+                                <div class="p-2 bg-white/85 rounded-xl shadow-sm shrink-0"><i data-lucide="smile" class="w-4 h-4 text-gray-800"></i></div>
+                                <div>
+                                    <div class="font-bold text-yellow-900 text-sm">ポジティブ・心地よい</div>
+                                    <div class="text-xs text-yellow-700 mt-0.5">前向き、ワクワク、心が満たされている</div>
+                                </div>
+                            </div>
+                            <i data-lucide="chevron-right" class="w-4 h-4 text-gray-800 group-hover:translate-x-0.5 transition-transform"></i>
+                        </button>
+                        
+                        <button onclick="wizardSelectStep1('negative')" class="w-full p-4 rounded-xl border border-red-200 bg-red-50/40 hover:bg-red-50 text-left transition flex items-center justify-between group">
+                            <div class="flex items-center gap-3">
+                                <div class="p-2 bg-white/85 rounded-xl shadow-sm shrink-0"><i data-lucide="cloud-rain" class="w-4 h-4 text-gray-800"></i></div>
+                                <div>
+                                    <div class="font-bold text-red-900 text-sm">ネガティブ・モヤモヤする</div>
+                                    <div class="text-xs text-red-700 mt-0.5">イライラ、不穏、悲しい、どんよりしている</div>
+                                </div>
+                            </div>
+                            <i data-lucide="chevron-right" class="w-4 h-4 text-gray-800 group-hover:translate-x-0.5 transition-transform"></i>
+                        </button>
+
+                        <button onclick="wizardSelectStep1('opposite')" class="w-full p-4 rounded-xl border border-purple-200 bg-purple-50/40 hover:bg-purple-50 text-left transition flex items-center justify-between group">
+                            <div class="flex items-center gap-3">
+                                <div class="p-2 bg-white/85 rounded-xl shadow-sm shrink-0"><i data-lucide="scale" class="w-4 h-4 text-gray-800"></i></div>
+                                <div>
+                                    <div class="font-bold text-purple-900 text-sm">複雑・対極（2つの気持ちが混ざる）</div>
+                                    <div class="text-xs text-purple-700 mt-0.5">正反対の感情が同存して葛藤・混乱している</div>
+                                </div>
+                            </div>
+                            <i data-lucide="chevron-right" class="w-4 h-4 text-gray-800 group-hover:translate-x-0.5 transition-transform"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Wizard Step 2 -->
+                <div id="wizard-step-2" class="hidden bg-white rounded-2xl p-4 border border-iosBorder ios-shadow space-y-3">
+                    <h2 class="font-bold text-gray-800 text-sm flex items-center gap-1.5">
+                        <i data-lucide="layers" class="w-4 h-4 text-gray-800"></i>
+                        <span id="step-2-title">【Step 2】どんなタイプ・感覚ですか？</span>
+                    </h2>
+                    <div id="step-2-options" class="grid grid-cols-1 gap-2.5 pt-1"></div>
+                </div>
+
+                <!-- Wizard Step 3 -->
+                <div id="wizard-step-3" class="hidden space-y-3">
+                    <div class="flex justify-between items-center px-1">
+                        <h2 class="font-bold text-gray-800 text-sm flex items-center gap-1.5">
+                            <i data-lucide="check-circle-2" class="w-4 h-4 text-gray-800"></i>
+                            【Step 3】しっくりくる感情をタップ（複数選択可）
+                        </h2>
+                    </div>
+                    <div id="step-3-candidates" class="grid grid-cols-1 gap-2.5"></div>
+                </div>
+
+            </div>
+
+            <div id="mode-grid" class="hidden space-y-4">
+                
+                <div class="flex overflow-x-auto gap-1.5 pb-1 no-scrollbar text-xs">
+                    <button onclick="filterGrid('all')" class="grid-filter-btn px-3 py-1.5 rounded-full whitespace-nowrap font-medium bg-iosPrimary text-white shadow-sm" data-cat="all">すべて</button>
+                    <button onclick="filterGrid('basic')" class="grid-filter-btn px-3 py-1.5 rounded-full whitespace-nowrap font-medium bg-white border border-iosBorder text-gray-600 shadow-sm" data-cat="basic">基本感情</button>
+                    <button onclick="filterGrid('mix1')" class="grid-filter-btn px-3 py-1.5 rounded-full whitespace-nowrap font-medium bg-white border border-iosBorder text-gray-600 shadow-sm" data-cat="mix1">第一次混合</button>
+                    <button onclick="filterGrid('mix2')" class="grid-filter-btn px-3 py-1.5 rounded-full whitespace-nowrap font-medium bg-white border border-iosBorder text-gray-600 shadow-sm" data-cat="mix2">第二次混合</button>
+                    <button onclick="filterGrid('mix3')" class="grid-filter-btn px-3 py-1.5 rounded-full whitespace-nowrap font-medium bg-white border border-iosBorder text-gray-600 shadow-sm" data-cat="mix3">第三次混合</button>
+                    <button onclick="filterGrid('opposite')" class="grid-filter-btn px-3 py-1.5 rounded-full whitespace-nowrap font-medium bg-white border border-iosBorder text-gray-600 shadow-sm" data-cat="opposite">対極の感情</button>
+                </div>
+
+                <div id="grid-container" class="grid grid-cols-2 gap-2.5"></div>
+            </div>
+
+            <div id="mode-wheel" class="hidden space-y-3">
+                <div class="bg-white rounded-2xl p-4 border border-iosBorder ios-shadow space-y-3">
+                    <h2 class="font-bold text-gray-800 text-sm flex items-center gap-1.5">
+                        <i data-lucide="flower-2" class="w-4 h-4 text-iosPrimary"></i>
+                        プルチックの感情の輪
+                    </h2>
+                    <div id="wheel-selected" class="flex flex-wrap gap-1.5 items-center px-1 min-h-[28px]"></div>
+                    <div id="wheel-illustration" class="flex justify-center"></div>
+                    <ul class="text-xs text-gray-500 leading-relaxed space-y-1 px-1">
+                        <li>・中心に近いほど強く、外側ほど穏やかな基本感情です。</li>
+                        <li>・外側へ、第一次 → 第二次 → 第三次の混合感情が並びます（色は元の2感情を混ぜた色）。</li>
+                        <li>・向かい合う感情は対極の関係です。</li>
+                    </ul>
+                    <div>
+                        <div class="text-xs font-bold text-gray-700 mb-1.5 px-1">対極の感情（輪の反対側同士の組み合わせ）</div>
+                        <div id="wheel-opposites" class="grid grid-cols-2 gap-2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="record-panel" class="bg-white rounded-2xl p-4 border border-iosBorder ios-shadow space-y-3">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-1.5">
+                        <i data-lucide="check-square" class="w-4 h-4 text-iosPrimary"></i>
+                        <span class="font-bold text-sm text-gray-800">選択中</span>
+                        <span id="selected-count" class="text-xs bg-blue-100 text-iosPrimary font-bold px-2 py-0.5 rounded-full">0</span>
+                    </div>
+                    <button id="btn-clear-selected" onclick="clearSelectedEmotions()" class="text-xs text-gray-400 hover:text-red-500 hidden font-medium">
+                        クリア
+                    </button>
+                </div>
+
+                <div id="selected-tags-container" class="flex flex-wrap gap-1.5 min-h-[36px] p-2 bg-gray-50 rounded-xl border border-dashed border-gray-200 items-center">
+                    <span class="text-xs text-gray-400 italic">上のカードから選択してください</span>
+                </div>
+
+                <div>
+                    <textarea id="memo-input" rows="3" placeholder="今どんな気分ですか？メモを残す..." class="w-full p-3 bg-gray-50 border border-iosBorder rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-iosPrimary/30 focus:border-iosPrimary transition resize-none"></textarea>
+                </div>
+
+                <button onclick="saveRecord()" class="w-full py-3 bg-iosPrimary text-white rounded-xl font-bold text-sm hover:bg-blue-600 active:scale-[0.99] transition shadow-md flex items-center justify-center gap-1.5">
+                    <i data-lucide="save" class="w-4 h-4"></i>
+                    保存する
+                </button>
+            </div>
+
+        </main>
+
+        <!-- MAIN VIEW: 履歴 (HISTORY) -->
+        <main id="view-history" class="hidden flex-1 p-4 space-y-4 overflow-y-auto">
+            <div class="flex items-center justify-between px-1">
+                <h2 class="font-bold text-base text-gray-800 flex items-center gap-1.5">
+                    <i data-lucide="history" class="w-5 h-5 text-iosPrimary"></i>
+                    感情記録の履歴
+                </h2>
+                <button onclick="clearAllHistory()" class="text-xs text-red-500 hover:text-red-700 font-medium">
+                    全削除
+                </button>
+            </div>
+
+            <div id="history-list" class="space-y-3"></div>
+        </main>
+
+        <nav class="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/90 backdrop-blur-md border-t border-iosBorder px-8 py-2.5 flex justify-around z-30 shadow-lg">
+            <button onclick="switchTab('record')" id="nav-btn-record" class="flex flex-col items-center gap-0.5 text-iosPrimary">
+                <i data-lucide="home" class="w-5 h-5"></i>
+                <span class="text-[10px] font-bold">記録</span>
+            </button>
+            <button onclick="switchTab('history')" id="nav-btn-history" class="flex flex-col items-center gap-0.5 text-gray-400 hover:text-gray-600">
+                <i data-lucide="list-todo" class="w-5 h-5"></i>
+                <span class="text-[10px] font-bold">履歴</span>
+            </button>
+        </nav>
+
+        <!-- Toast Notification -->
+        <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 bg-gray-900/90 text-white text-xs px-4 py-2 rounded-full shadow-lg transition-all duration-300 opacity-0 pointer-events-none z-50 flex items-center gap-1.5">
+            <i data-lucide="check" class="w-3.5 h-3.5 text-green-400"></i>
+            <span id="toast-message">保存しました</span>
+        </div>
+
+    </div>
+
+    <script>
+        // Emotion Master Database based on Plutchik's Model
+        const EMOTIONS = [
+            { id: 'joy', name: '喜び', category: 'basic', color: 'bg-yellow-100 border-yellow-300 text-yellow-900', icon: 'smile', desc: 'うれしい！楽しい！と感じる心持ち', voice: '最高の気分！' },
+            { id: 'serenity', name: '平穏', category: 'basic', color: 'bg-yellow-50 border-yellow-200 text-yellow-800', icon: 'star', desc: '心が穏やかでゆったり落ち着いた状態', voice: 'のんびり心地いいな' },
+            { id: 'trust', name: '信頼', category: 'basic', color: 'bg-lime-100 border-lime-300 text-lime-900', icon: 'shield', desc: '相手や状況を信じて安心している状態', voice: 'この人なら任せられる' },
+            { id: 'acceptance', name: '容認', category: 'basic', color: 'bg-lime-50 border-lime-200 text-lime-800', icon: 'check-circle', desc: '物事を受け入れこれでいいと認める', voice: 'ありのままで大丈夫' },
+            { id: 'fear', name: '恐れ', category: 'basic', color: 'bg-teal-100 border-teal-300 text-teal-900', icon: 'frown', desc: '危険や不気味なものに身構え逃げたい気持ち', voice: 'こわい、逃げたい！' },
+            { id: 'apprehension', name: '不安', category: 'basic', color: 'bg-teal-50 border-teal-200 text-teal-800', icon: 'alert-circle', desc: 'これからどうなるか分からず心がざわつく', voice: '大丈夫かな…心配だ' },
+            { id: 'surprise', name: '驚き', category: 'basic', color: 'bg-cyan-100 border-cyan-300 text-cyan-900', icon: 'eye', desc: '予想外のことにハッと息をのむ瞬間', voice: 'えっ！？本当！？' },
+            { id: 'distraction', name: '動揺', category: 'basic', color: 'bg-cyan-50 border-cyan-200 text-cyan-800', icon: 'help-circle', desc: '心が揺さぶられ冷静さを失った状態', voice: 'どうしよう、落ち着かない' },
+            { id: 'sadness', name: '悲しみ', category: 'basic', color: 'bg-indigo-100 border-indigo-300 text-indigo-900', icon: 'cloud', desc: '大切なものを失い思い通りにならず胸が痛む', voice: '悲しくて泣きたい…' },
+            { id: 'pensiveness', name: '哀愁', category: 'basic', color: 'bg-indigo-50 border-indigo-200 text-indigo-800', icon: 'umbrella', desc: 'どこか寂しくしんみりとした気持ち', voice: 'ふと切なくなるな' },
+            { id: 'disgust', name: '嫌悪', category: 'basic', color: 'bg-purple-100 border-purple-300 text-purple-900', icon: 'meh', desc: '感覚的に嫌だ・遠ざけたいと強く感じる', voice: 'もう耐えられない、嫌だ' },
+            { id: 'boredom', name: '退屈', category: 'basic', color: 'bg-purple-50 border-purple-200 text-purple-800', icon: 'minus-circle', desc: '刺激や関心がなく手持ち無沙汰な状態', voice: 'なんにも面白くないや' },
+            { id: 'anger', name: '怒り', category: 'basic', color: 'bg-red-100 border-red-300 text-red-900', icon: 'octagon-alert', desc: '理不尽に許せないと強く反発する気持ち', voice: '絶対に許せない！' },
+            { id: 'annoyance', name: '苛立', category: 'basic', color: 'bg-red-50 border-red-200 text-red-800', icon: 'x-square', desc: '思い通りにいかずイライラトゲトゲする', voice: 'もう、イライラする！' },
+            { id: 'anticipation', name: '期待', category: 'basic', color: 'bg-orange-100 border-orange-300 text-orange-900', icon: 'compass', desc: '良いことが起きそうと楽しみに待つ', voice: 'ワクワク、楽しみだな！' },
+            { id: 'interest', name: '関心', category: 'basic', color: 'bg-orange-50 border-orange-200 text-orange-800', icon: 'send', desc: '興味を持ちもっと知りたいと思う気持ち', voice: 'へえ、もっと知りたい' },
+
+            // 第一次混合感情
+            { id: 'optimism', name: '楽観', formula: '期待 ＋ 喜び', category: 'mix1', color: 'bg-emerald-50 border-emerald-200 text-emerald-800', icon: 'sun', desc: 'きっとうまくいくと明るく考えている', voice: 'なんとかなる、大丈夫！' },
+            { id: 'love', name: '愛', formula: '喜び ＋ 信頼', category: 'mix1', color: 'bg-emerald-100 border-emerald-300 text-emerald-900', icon: 'heart', desc: '相手を愛おしく思い心から大切にする', voice: 'とても愛おしい存在だな' },
+            { id: 'submission', name: '服従', formula: '信頼 ＋ 恐れ', category: 'mix1', color: 'bg-slate-100 border-slate-300 text-slate-800', icon: 'users', desc: '相手の力を恐れて言われた通り従う', voice: '指示に従うしかない…' },
+            { id: 'awe', name: '畏敬', formula: '恐れ ＋ 驚き', category: 'mix1', color: 'bg-slate-100 border-slate-300 text-slate-800', icon: 'zap', desc: 'すごさに驚きつつ圧倒されひれ伏す', voice: 'スケールが凄すぎて言葉が出ない' },
+            { id: 'disappointment', name: '失望', formula: '驚き ＋ 悲しみ', category: 'mix1', color: 'bg-rose-50 border-rose-200 text-rose-800', icon: 'thumbs-down', desc: '期待していた分ガッカリする気持ち', voice: 'あんなに期待したのにガッカリ…' },
+            { id: 'remorse', name: '後悔', formula: '悲しみ ＋ 嫌悪', category: 'mix1', color: 'bg-rose-100 border-rose-300 text-rose-900', icon: 'frown', desc: 'あんな事をしなければと自分が嫌になる', voice: 'なんであんな事しちゃったんだろう' },
+            { id: 'contempt', name: '軽蔑', formula: '嫌悪 ＋ 怒り', category: 'mix1', color: 'bg-pink-50 border-pink-200 text-pink-800', icon: 'eye-off', desc: '相手を低く見下し腹を立てる気持ち', voice: 'くだらない、あきれ果てる' },
+            { id: 'aggressiveness', name: '攻撃', formula: '怒り ＋ 期待', category: 'mix1', color: 'bg-pink-100 border-pink-300 text-pink-900', icon: 'swords', desc: '打ち負かそうと意気込んで向かっていく', voice: '一気に畳みかけてやる！' },
+
+            // 第二次混合感情
+            { id: 'hope', name: '希望', formula: '期待 ＋ 信頼', category: 'mix2', color: 'bg-green-50 border-green-200 text-green-800', icon: 'star', desc: '未来を信じてきっと良くなると願う', voice: '未来はきっと明るいはず' },
+            { id: 'guilt', name: '罪悪感', formula: '喜び ＋ 恐れ', category: 'mix2', color: 'bg-red-50 border-red-200 text-red-800', icon: 'shield-alert', desc: '喜んだ事に悪い事をしたかもと恐れる', voice: '自分だけ楽しんで良かったのかな…' },
+            { id: 'curiosity', name: '好奇心', formula: '信頼 ＋ 驚き', category: 'mix2', color: 'bg-cyan-50 border-cyan-200 text-cyan-800', icon: 'search', desc: '面白さに驚きつつ探求したくなる', voice: 'わあ、これ面白そう！調べてみよう' },
+            { id: 'despair', name: '絶望', formula: '恐れ ＋ 悲しみ', category: 'mix2', color: 'bg-red-100 border-red-300 text-red-900', icon: 'bed-double', desc: 'もうどうにもならないと途方に暮れる', voice: 'もう何もかもおしまいだ…' },
+            { id: 'unbelief', name: '不信', formula: '驚き ＋ 嫌悪', category: 'mix2', color: 'bg-rose-50 border-rose-200 text-rose-800', icon: 'user-x', desc: '思いがけない態度に信じられないと嫌気がさす', voice: 'そんな人だったなんて信じられない' },
+            { id: 'envy', name: '嫉妬', formula: '悲しみ ＋ 怒り', category: 'mix2', color: 'bg-rose-100 border-rose-300 text-rose-900', icon: 'angry', desc: '人が羨ましくて寂しく相手に腹が立つ', voice: 'なんであの人ばかりズルい！' },
+            { id: 'cynicism', name: '冷笑', formula: '期待 ＋ 嫌悪', category: 'mix2', color: 'bg-amber-50 border-amber-200 text-amber-800', icon: 'smile', desc: '相手の失敗を期待しバカにしてあざ笑う', voice: 'どうせ失敗するに決まってるよ' },
+            { id: 'pride', name: '誇り', formula: '怒り ＋ 喜び', category: 'mix2', color: 'bg-emerald-50 border-emerald-200 text-emerald-800', icon: 'crown', desc: '悔しさをバネに成果を上げ自分を誇る', voice: '見返してやった！自分を誇りたい' },
+
+            // 第三次混合感情
+            { id: 'anxiety', name: '不安（複雑）', formula: '期待 ＋ 恐れ', category: 'mix3', color: 'bg-orange-50 border-orange-200 text-orange-800', icon: 'wind', desc: '結果を期待しつつも悪い事態を恐れる', voice: 'どうなるんだろう、落ち着かない' },
+            { id: 'delight', name: '歓喜', formula: '喜び ＋ 驚き', category: 'mix3', color: 'bg-emerald-100 border-emerald-300 text-emerald-900', icon: 'laugh', desc: '予想外の素晴らしい事に飛び上がるほど喜ぶ', voice: '嘘でしょ！？やったーー！！' },
+            { id: 'sentimentality', name: '感傷', formula: '信頼 ＋ 悲しみ', category: 'mix3', color: 'bg-slate-50 border-slate-200 text-slate-800', icon: 'hand-heart', desc: '思い出や絆を振り返り胸が締め付けられる', voice: 'あの頃が懐かしくて切ないな' },
+            { id: 'shame', name: '恥', formula: '恐れ ＋ 嫌悪', category: 'mix3', color: 'bg-red-50 border-red-200 text-red-800', icon: 'flame', desc: '愚かさを見られるのを恐れ自分が嫌になる', voice: '穴があったら入りたい…' },
+            { id: 'pessimism', name: '悲観', formula: '期待 ＋ 悲しみ', category: 'mix3', color: 'bg-indigo-50 border-indigo-200 text-indigo-800', icon: 'cloud-rain', desc: '先のことを考えても悪い結果ばかり浮かぶ', voice: 'どうせうまくいくはずない…' },
+            { id: 'dominance', name: '支配', formula: '怒り ＋ 信頼', category: 'mix3', color: 'bg-gray-100 border-gray-300 text-gray-800', icon: 'crown', desc: '相手をコントロールできると確信し抑え込む', voice: '自分の思い通りに動かすぞ' },
+            { id: 'outrage', name: '憤慨', formula: '驚き ＋ 怒り', category: 'mix3', color: 'bg-red-100 border-red-300 text-red-900', icon: 'angry', desc: '予想もしない酷い仕打ちに激しく怒る', voice: 'なんて非道な！断じて許せない！' },
+            { id: 'morbidity', name: '病的', formula: '喜び ＋ 嫌悪', category: 'mix3', color: 'bg-purple-50 border-purple-200 text-purple-800', icon: 'cog', desc: '不快なものや歪んだ状況に不気味な喜びを得る', voice: '不快なのにどこか引き込まれる…' },
+
+            // 対極の感情
+            { id: 'conflict', name: '葛藤', formula: '喜び ＋ 悲しみ', category: 'opposite', color: 'bg-purple-100 border-purple-300 text-purple-900', icon: 'scale', desc: 'やりたい気持ちと悲しい気持ちが心で戦う', voice: '「やりたい、でも別れが切ない」' },
+            { id: 'ambivalence', name: '両価性', formula: '信頼 ＋ 嫌悪', category: 'opposite', color: 'bg-purple-100 border-purple-300 text-purple-900', icon: 'arrow-left-right', desc: '信じたい自分と嫌悪する自分（愛憎同存）', voice: '「信じたい、でもどうしても受け入れられない」' },
+            { id: 'panic', name: '恐慌', formula: '恐れ ＋ 怒り', category: 'opposite', color: 'bg-red-100 border-red-300 text-red-900', icon: 'biohazard', desc: '恐怖と怒りが一気に押し寄せパニックに', voice: '「怖すぎる、でも腹が立って爆発しそう！」' },
+            { id: 'confusion', name: '混乱', formula: '期待 ＋ 驚き', category: 'opposite', color: 'bg-blue-100 border-blue-300 text-blue-900', icon: 'refresh-cw', desc: '期待と違う出来事に頭が真っ白になる', voice: '「楽しみにしていたのに、えっ何これ！？」' }
+        ];
+
+        const WIZARD_TREE = {
+            positive: {
+                title: '【Step 2】どのような感覚（タイプ）が近いですか？',
+                options: [
+                    { icon: 'rocket', label: 'ワクワク・未来を楽しみにしている', sub: '楽観、希望、歓喜、期待、関心など', emotionIds: ['optimism', 'hope', 'delight', 'anticipation', 'interest'] },
+                    { icon: 'sprout', label: 'じんわり・安心・愛おしい', sub: '愛、誇り、喜び、平穏、信頼、容認など', emotionIds: ['love', 'pride', 'joy', 'serenity', 'trust', 'acceptance'] },
+                    { icon: 'lightbulb', label: '意外な面白さを探求したい', sub: '好奇心など', emotionIds: ['curiosity'] }
+                ]
+            },
+            negative: {
+                title: '【Step 2】どんなエネルギー（モヤモヤ）を感じますか？',
+                options: [
+                    { icon: 'flame', label: 'トゲトゲ・腹が立つ・攻撃的', sub: '攻撃、憤慨、軽蔑、冷笑、嫉妬、怒り、苛立、嫌悪など', emotionIds: ['aggressiveness', 'outrage', 'contempt', 'cynicism', 'envy', 'anger', 'annoyance', 'disgust'] },
+                    { icon: 'zap', label: 'ドキドキ・不安や怖さを感じる', sub: '絶望、服従、恥、畏敬、不信、恐れ、不安、動揺など', emotionIds: ['despair', 'submission', 'shame', 'awe', 'unbelief', 'fear', 'apprehension', 'distraction', 'surprise'] },
+                    { icon: 'cloud-rain', label: 'どんより・悲しい・落ち込んでいる', sub: '失望、悲観、後悔、感傷、悲しみ、哀愁、退屈など', emotionIds: ['disappointment', 'pessimism', 'remorse', 'sentimentality', 'sadness', 'pensiveness', 'boredom'] },
+                    { icon: 'wind', label: '不気味・罪悪感', sub: '罪悪感、病的など', emotionIds: ['guilt', 'morbidity'] }
+                ]
+            },
+            opposite: {
+                title: '【Step 2】どんな「2つの気持ち」がぶつかっていますか？',
+                options: [
+                    { icon: 'scale', label: '「やりたい・好き」 vs 「悲しい・切ない」', sub: '葛藤（夢の旅立ちと別れの寂しさ）', emotionIds: ['conflict'] },
+                    { icon: 'arrow-left-right', label: '「信じたい・頼りたい」 vs 「嫌い・嫌悪」', sub: '両価性（愛憎の矛盾・受け入れられない部分）', emotionIds: ['ambivalence'] },
+                    { icon: 'biohazard', label: '「怖くて逃げたい」 vs 「腹が立って爆発しそう」', sub: '恐慌（窮地でのパニック・逆ギレ）', emotionIds: ['panic'] },
+                    { icon: 'refresh-cw', label: '「期待していた」 vs 「想定外で驚いている」', sub: '混乱（期待と違いすぎて頭が真っ白）', emotionIds: ['confusion'] }
+                ]
+            }
+        };
+
+        function refreshIcons() {
+            try { if (window.lucide) lucide.createIcons(); } catch (e) { console.error(e); }
+        }
+
+        let timerInterval = null;
+        let timerSeconds = 90;
+        let isTimerRunning = false;
+        let currentWizardStep1 = null;
+        let activeWizardEmotionIds = [];
+        let selectedEmotionIds = new Set();
+
+        window.onload = function() {
+            refreshIcons();
+            renderGrid('all');
+            renderSelectedTags();
+            loadHistory();
+            renderWheelIllustration();
+        };
+
+        // プルチックの輪のイラスト（SVG）
+        // 内側→外側: 基本感情(強) / 基本感情(弱) / 第一次混合 / 第二次混合 / 第三次混合
+        // 選択中の感情は青い枠で強調し、それ以外は薄く表示する
+        function renderWheelIllustration() {
+            const target = document.getElementById('wheel-illustration');
+            if (!target) return;
+            try {
+                const nameOf = id => (EMOTIONS.find(e => e.id === id) || {}).name || id;
+                const petals = [
+                    { strong: 'joy', mild: 'serenity', fill: '#fde047' },
+                    { strong: 'trust', mild: 'acceptance', fill: '#bef264' },
+                    { strong: 'fear', mild: 'apprehension', fill: '#5eead4' },
+                    { strong: 'surprise', mild: 'distraction', fill: '#67e8f9' },
+                    { strong: 'sadness', mild: 'pensiveness', fill: '#a5b4fc' },
+                    { strong: 'disgust', mild: 'boredom', fill: '#d8b4fe' },
+                    { strong: 'anger', mild: 'annoyance', fill: '#fca5a5' },
+                    { strong: 'anticipation', mild: 'interest', fill: '#fdba74' }
+                ];
+                // 第一次: 隣り合う2感情（petals[i] と petals[i+1] の間）
+                const mix1 = ['love', 'submission', 'awe', 'disappointment', 'remorse', 'contempt', 'aggressiveness', 'optimism'];
+                // 第二次: 1つ飛ばしの2感情（petals[j-1] と petals[j+1]、中心は petals[j] の位置）
+                const mix2 = ['hope', 'guilt', 'curiosity', 'despair', 'unbelief', 'envy', 'cynicism', 'pride'];
+                // 第三次: 2つ飛ばしの2感情（petals[k-1] と petals[k+2]、中心は k と k+1 の間）
+                const mix3 = ['anxiety', 'delight', 'sentimentality', 'shame', 'outrage', 'pessimism', 'morbidity', 'dominance'];
+
+                const mod = n => ((n % 8) + 8) % 8;
+                const blend = (a, b) => {
+                    const c = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+                    const ca = c(a), cb = c(b);
+                    return '#' + ca.map((v, i) => Math.round((v + cb[i]) / 2).toString(16).padStart(2, '0')).join('');
+                };
+
+                const cx = 190, cy = 190;
+                const pt = (r, deg) => {
+                    const t = (deg - 90) * Math.PI / 180;
+                    return [cx + r * Math.cos(t), cy + r * Math.sin(t)];
+                };
+                const R = { strong: [22, 54], mild: [56, 88], m1: [90, 122], m2: [124, 156], m3: [158, 190] };
+
+                // 全セクターを1つの配列にまとめる
+                const items = [];
+                petals.forEach((p, i) => {
+                    const mid = i * 45;
+                    items.push({ id: p.strong, ring: R.strong, mid, fill: p.fill, op: 1, size: 12, weight: 700 });
+                    items.push({ id: p.mild, ring: R.mild, mid, fill: p.fill, op: 0.5, size: 11, weight: 500 });
+                });
+                mix1.forEach((id, i) => items.push({ id, ring: R.m1, mid: i * 45 + 22.5, fill: blend(petals[i].fill, petals[mod(i + 1)].fill), op: 0.8, size: 11, weight: 600 }));
+                mix2.forEach((id, j) => items.push({ id, ring: R.m2, mid: j * 45, fill: blend(petals[mod(j - 1)].fill, petals[mod(j + 1)].fill), op: 0.8, size: 11, weight: 600 }));
+                mix3.forEach((id, k) => items.push({ id, ring: R.m3, mid: k * 45 + 22.5, fill: blend(petals[mod(k - 1)].fill, petals[mod(k + 2)].fill), op: 0.8, size: 10, weight: 600 }));
+
+                const hasSel = selectedEmotionIds.size > 0;
+                const isSel = it => selectedEmotionIds.has(it.id);
+
+                const sectorPath = (it) => {
+                    const [r0, r1] = it.ring, a0 = it.mid - 22.5, a1 = it.mid + 22.5;
+                    const [x0, y0] = pt(r1, a0), [x1, y1] = pt(r1, a1);
+                    const [x2, y2] = pt(r0, a1), [x3, y3] = pt(r0, a0);
+                    return `M${x0.toFixed(1)},${y0.toFixed(1)} A${r1},${r1} 0 0 1 ${x1.toFixed(1)},${y1.toFixed(1)} L${x2.toFixed(1)},${y2.toFixed(1)} A${r0},${r0} 0 0 0 ${x3.toFixed(1)},${y3.toFixed(1)} Z`;
+                };
+                const labelOf = (it, sel) => {
+                    const r = (it.ring[0] + it.ring[1]) / 2;
+                    const [x, y] = pt(r, it.mid);
+                    const opacity = hasSel && !sel ? 0.45 : 1;
+                    const weight = sel ? 800 : it.weight;
+                    return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" dy="0.35em" text-anchor="middle" font-family="'Noto Sans JP', 'Inter', sans-serif" font-size="${it.size}" font-weight="${weight}" fill="#111827" fill-opacity="${opacity}" stroke="#ffffff" stroke-width="2.5" stroke-opacity="0.55" paint-order="stroke">${nameOf(it.id)}</text>`;
+                };
+
+                let shapes = '', labels = '', top = '';
+                items.forEach(it => {
+                    const sel = isSel(it);
+                    if (sel) {
+                        // 選択中: 不透明で濃い青枠。他のセクターの上に重ねて描画
+                        top += `<path d="${sectorPath(it)}" fill="${it.fill}" fill-opacity="1" stroke="#007AFF" stroke-width="3.2" stroke-linejoin="round"/>`;
+                    } else {
+                        const op = hasSel ? it.op * 0.35 : it.op;
+                        shapes += `<path d="${sectorPath(it)}" fill="${it.fill}" fill-opacity="${op.toFixed(2)}" stroke="#ffffff" stroke-width="1.2"/>`;
+                    }
+                    labels += labelOf(it, sel);
+                });
+
+                const center = `<circle cx="${cx}" cy="${cy}" r="20" fill="#ffffff" stroke="#e5e5ea"/>` +
+                    `<text x="${cx}" y="${cy}" dy="0.35em" text-anchor="middle" font-family="'Noto Sans JP', 'Inter', sans-serif" font-size="10" font-weight="700" fill="#8e8e93">感情</text>`;
+
+                target.innerHTML =
+                    `<svg viewBox="0 0 380 380" class="w-full" role="img" aria-label="プルチックの感情の輪">${shapes}${top}${labels}${center}</svg>`;
+
+                // 選択中の感情の表示
+                const selBox = document.getElementById('wheel-selected');
+                if (selBox) {
+                    if (!hasSel) {
+                        selBox.innerHTML = '<span class="text-xs text-gray-400 italic">「質問で絞り込む」「全感情一覧」で選んだ感情が、輪の中で強調表示されます</span>';
+                    } else {
+                        selBox.innerHTML = '<span class="text-xs text-gray-500 font-semibold">選択中：</span>' +
+                            Array.from(selectedEmotionIds).map(id => {
+                                const e = EMOTIONS.find(x => x.id === id);
+                                return e ? `<span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${e.color} border-2 border-iosPrimary/60 shadow-sm">${e.name}</span>` : '';
+                            }).join('');
+                    }
+                }
+
+                // 対極の感情（輪の反対側同士）。選択中は青枠で強調
+                const opp = EMOTIONS.filter(e => e.category === 'opposite');
+                document.getElementById('wheel-opposites').innerHTML = opp.map(e => {
+                    const sel = selectedEmotionIds.has(e.id);
+                    const cls = sel ? 'border-2 border-iosPrimary ring-2 ring-iosPrimary/25' : (hasSel ? 'border opacity-50' : 'border');
+                    return `
+                    <div class="p-2.5 rounded-xl ${e.color} ${cls}">
+                        <div class="font-bold text-xs">${e.name}</div>
+                        <div class="text-[10px] opacity-80 font-semibold">${e.formula}</div>
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                console.error('wheel render error', err);
+            }
+        }
+
+        function switchTab(tab) {
+            const viewRecord = document.getElementById('view-record');
+            const viewHistory = document.getElementById('view-history');
+            const btnRecord = document.getElementById('nav-btn-record');
+            const btnHistory = document.getElementById('nav-btn-history');
+
+            if (tab === 'record') {
+                viewRecord.classList.remove('hidden');
+                viewHistory.classList.add('hidden');
+                btnRecord.className = "flex flex-col items-center gap-0.5 text-iosPrimary";
+                btnHistory.className = "flex flex-col items-center gap-0.5 text-gray-400 hover:text-gray-600";
+            } else {
+                viewRecord.classList.add('hidden');
+                viewHistory.classList.remove('hidden');
+                btnRecord.className = "flex flex-col items-center gap-0.5 text-gray-400 hover:text-gray-600";
+                btnHistory.className = "flex flex-col items-center gap-0.5 text-iosPrimary";
+                loadHistory();
+            }
+        }
+
+        function switchMode(mode) {
+            const panels = {
+                wizard: document.getElementById('mode-wizard'),
+                grid: document.getElementById('mode-grid'),
+                wheel: document.getElementById('mode-wheel')
+            };
+            const tabs = {
+                wizard: document.getElementById('tab-mode-wizard'),
+                grid: document.getElementById('tab-mode-grid'),
+                wheel: document.getElementById('tab-mode-wheel')
+            };
+            Object.keys(panels).forEach(key => {
+                if (key === mode) {
+                    panels[key].classList.remove('hidden');
+                    tabs[key].className = "flex-1 py-2 rounded-lg bg-white shadow-sm text-gray-900 transition flex items-center justify-center gap-1.5 font-semibold";
+                } else {
+                    panels[key].classList.add('hidden');
+                    tabs[key].className = "flex-1 py-2 rounded-lg text-gray-500 transition flex items-center justify-center gap-1.5 font-normal";
+                }
+            });
+            // 感情の輪はイラスト表示のみなので、選択・保存パネルは隠す
+            document.getElementById('record-panel').classList.toggle('hidden', mode === 'wheel');
+            if (mode === 'grid') {
+                renderGrid('all');
+            }
+        }
+
+        // Timer Logic
+        function toggleTimer() {
+            if (isTimerRunning) {
+                pauseTimer();
+            } else {
+                startTimer();
+            }
+        }
+
+        function startTimer() {
+            isTimerRunning = true;
+            document.getElementById('timer-btn-text').innerText = '一時停止';
+            document.getElementById('timer-btn-icon').setAttribute('data-lucide', 'pause');
+            refreshIcons();
+
+            timerInterval = setInterval(() => {
+                if (timerSeconds > 0) {
+                    timerSeconds--;
+                    updateTimerUI();
+                } else {
+                    pauseTimer();
+                    showToast('90秒タイマーが完了しました');
+                }
+            }, 1000);
+        }
+
+        function pauseTimer() {
+            isTimerRunning = false;
+            clearInterval(timerInterval);
+            document.getElementById('timer-btn-text').innerText = 'スタート';
+            document.getElementById('timer-btn-icon').setAttribute('data-lucide', 'play');
+            refreshIcons();
+        }
+
+        function resetTimer() {
+            pauseTimer();
+            timerSeconds = 90;
+            updateTimerUI();
+        }
+
+        function updateTimerUI() {
+            const mins = Math.floor(timerSeconds / 60);
+            const secs = timerSeconds % 60;
+            document.getElementById('timer-display').innerText = 
+                `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+            const percentage = (timerSeconds / 90) * 100;
+            document.getElementById('timer-progress').style.width = `${percentage}%`;
+        }
+
+        // Wizard Flow
+        function wizardSelectStep1(key) {
+            currentWizardStep1 = key;
+            const data = WIZARD_TREE[key];
+            if (!data) return;
+
+            document.getElementById('wizard-step-1').classList.add('hidden');
+            document.getElementById('wizard-step-2').classList.remove('hidden');
+            document.getElementById('wizard-step-3').classList.add('hidden');
+            document.getElementById('wizard-step-indicator').innerText = 'Step 2 / 3';
+            document.getElementById('btn-wizard-back').classList.remove('hidden');
+
+            document.getElementById('step-2-title').innerText = data.title;
+            const container = document.getElementById('step-2-options');
+            container.innerHTML = '';
+
+            data.options.forEach((opt) => {
+                const btn = document.createElement('button');
+                btn.className = "w-full p-4 rounded-xl border border-iosBorder bg-gray-50/80 hover:bg-white hover:border-iosPrimary/50 text-left transition flex items-center justify-between group";
+                btn.onclick = () => wizardSelectStep2(opt.emotionIds);
+                btn.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <div class="p-2 bg-white/85 rounded-xl shadow-sm shrink-0">
+                            <i data-lucide="${opt.icon}" class="w-4 h-4 text-gray-800"></i>
+                        </div>
+                        <div>
+                            <div class="font-bold text-gray-800 text-sm">${opt.label}</div>
+                            <div class="text-xs text-gray-500 mt-0.5">${opt.sub}</div>
+                        </div>
+                    </div>
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-gray-800 group-hover:translate-x-0.5 transition-transform"></i>
+                `;
+                container.appendChild(btn);
+            });
+            refreshIcons();
+        }
+
+        function wizardSelectStep2(emotionIds) {
+            activeWizardEmotionIds = emotionIds;
+            document.getElementById('wizard-step-2').classList.add('hidden');
+            document.getElementById('wizard-step-3').classList.remove('hidden');
+            document.getElementById('wizard-step-indicator').innerText = 'Step 3 / 3';
+            renderWizardCandidates();
+        }
+
+        function renderWizardCandidates() {
+            const container = document.getElementById('step-3-candidates');
+            container.innerHTML = '';
+
+            const candidates = EMOTIONS.filter(e => activeWizardEmotionIds.includes(e.id));
+            candidates.forEach(emo => {
+                const card = createEmotionCard(emo);
+                container.appendChild(card);
+            });
+            refreshIcons();
+        }
+
+        function wizardBack() {
+            const step2Hidden = document.getElementById('wizard-step-2').classList.contains('hidden');
+            const step3Hidden = document.getElementById('wizard-step-3').classList.contains('hidden');
+
+            if (!step3Hidden) {
+                document.getElementById('wizard-step-3').classList.add('hidden');
+                document.getElementById('wizard-step-2').classList.remove('hidden');
+                document.getElementById('wizard-step-indicator').innerText = 'Step 2 / 3';
+            } else if (!step2Hidden) {
+                document.getElementById('wizard-step-2').classList.add('hidden');
+                document.getElementById('wizard-step-1').classList.remove('hidden');
+                document.getElementById('wizard-step-indicator').innerText = 'Step 1 / 3';
+                document.getElementById('btn-wizard-back').classList.add('hidden');
+            }
+        }
+
+        function createEmotionCard(emo) {
+            const isSelected = selectedEmotionIds.has(emo.id);
+            const card = document.createElement('div');
+            
+            card.className = `p-4 rounded-2xl border transition cursor-pointer relative overflow-hidden ${emo.color} ${isSelected ? 'emotion-card-selected bg-blue-50/95' : 'hover:shadow-sm'}`;
+            card.onclick = () => toggleSelectEmotion(emo.id);
+
+            card.innerHTML = `
+                <div class="flex items-start justify-between mb-1.5">
+                    <div class="flex items-center gap-2">
+                        <div class="p-2 bg-white/85 rounded-xl shadow-sm">
+                            <i data-lucide="${emo.icon}" class="w-4 h-4 text-gray-800"></i>
+                        </div>
+                        <div>
+                            <span class="font-bold text-sm tracking-wide">${emo.name}</span>
+                            ${emo.formula ? `<span class="text-[10px] block opacity-80 font-semibold">（${emo.formula}）</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-iosPrimary border-iosPrimary text-white shadow-md scale-110' : 'border-gray-300 bg-white/60 text-transparent'}">
+                        <i data-lucide="check" class="w-3.5 h-3.5 stroke-[3]"></i>
+                    </div>
+                </div>
+                <p class="text-xs opacity-90 leading-snug mb-2 font-medium">${emo.desc}</p>
+                <div class="text-[11px] font-bold italic opacity-90 bg-white/75 px-2.5 py-1 rounded-md inline-flex items-center gap-1.5 shadow-sm">
+                    <i data-lucide="message-circle" class="w-3.5 h-3.5 text-gray-800 shrink-0"></i>
+                    <span>${emo.voice}</span>
+                </div>
+            `;
+            return card;
+        }
+
+        function renderGrid(catFilter = 'all') {
+            const container = document.getElementById('grid-container');
+            container.innerHTML = '';
+
+            const list = catFilter === 'all' ? EMOTIONS : EMOTIONS.filter(e => e.category === catFilter);
+            list.forEach(emo => {
+                const isSelected = selectedEmotionIds.has(emo.id);
+                const item = document.createElement('div');
+                item.className = `p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${emo.color} ${isSelected ? 'emotion-card-selected bg-blue-50/95' : 'hover:shadow-sm'}`;
+                item.onclick = () => toggleSelectEmotion(emo.id);
+
+                item.innerHTML = `
+                    <div class="flex items-center justify-between mb-1">
+                        <div class="flex items-center gap-1.5">
+                            <i data-lucide="${emo.icon}" class="w-4 h-4 text-gray-800"></i>
+                            <span class="font-bold text-xs">${emo.name}</span>
+                        </div>
+                        <div class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-iosPrimary border-iosPrimary text-white shadow-sm scale-110' : 'border-gray-300 bg-white/60 text-transparent'}">
+                            <i data-lucide="check" class="w-3 h-3 stroke-[3]"></i>
+                        </div>
+                    </div>
+                    ${emo.formula ? `<div class="text-[9px] opacity-75 mb-1 font-semibold">${emo.formula}</div>` : ''}
+                    <div class="text-[10px] opacity-90 line-clamp-2 font-medium">${emo.desc}</div>
+                `;
+                container.appendChild(item);
+            });
+            refreshIcons();
+        }
+
+        function filterGrid(category) {
+            document.querySelectorAll('.grid-filter-btn').forEach(btn => {
+                if (btn.dataset.cat === category) {
+                    btn.className = "grid-filter-btn px-3 py-1.5 rounded-full whitespace-nowrap font-medium bg-iosPrimary text-white shadow-sm";
+                } else {
+                    btn.className = "grid-filter-btn px-3 py-1.5 rounded-full whitespace-nowrap font-medium bg-white border border-iosBorder text-gray-600 shadow-sm";
+                }
+            });
+            renderGrid(category);
+        }
+
+        function toggleSelectEmotion(id) {
+            if (selectedEmotionIds.has(id)) {
+                selectedEmotionIds.delete(id);
+            } else {
+                selectedEmotionIds.add(id);
+            }
+            renderSelectedTags();
+
+            const step3 = document.getElementById('wizard-step-3');
+            if (!step3.classList.contains('hidden')) {
+                renderWizardCandidates();
+            } else {
+                const activeCat = document.querySelector('.grid-filter-btn.bg-iosPrimary')?.dataset.cat || 'all';
+                renderGrid(activeCat);
+            }
+        }
+
+        function clearSelectedEmotions() {
+            selectedEmotionIds.clear();
+            renderSelectedTags();
+            const step3 = document.getElementById('wizard-step-3');
+            if (!step3.classList.contains('hidden')) {
+                renderWizardCandidates();
+            } else {
+                renderGrid(document.querySelector('.grid-filter-btn.bg-iosPrimary')?.dataset.cat || 'all');
+            }
+        }
+
+        function renderSelectedTags() {
+            renderWheelIllustration();
+            const container = document.getElementById('selected-tags-container');
+            const countEl = document.getElementById('selected-count');
+            const clearBtn = document.getElementById('btn-clear-selected');
+
+            countEl.innerText = selectedEmotionIds.size;
+            container.innerHTML = '';
+
+            if (selectedEmotionIds.size === 0) {
+                container.innerHTML = '<span class="text-xs text-gray-400 italic">上のカードから選択してください</span>';
+                clearBtn.classList.add('hidden');
+                return;
+            }
+
+            clearBtn.classList.remove('hidden');
+            selectedEmotionIds.forEach(id => {
+                const emo = EMOTIONS.find(e => e.id === id);
+                if (!emo) return;
+
+                const tag = document.createElement('span');
+                tag.className = `inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold ${emo.color} border-2 border-iosPrimary/60 shadow-sm`;
+                tag.innerHTML = `
+                    <i data-lucide="${emo.icon}" class="w-3 h-3"></i>
+                    ${emo.name}
+                    <button onclick="event.stopPropagation(); toggleSelectEmotion('${emo.id}')" class="hover:opacity-75 ml-0.5 text-gray-600">
+                        <i data-lucide="x" class="w-3 h-3 stroke-[3]"></i>
+                    </button>
+                `;
+                container.appendChild(tag);
+            });
+            refreshIcons();
+        }
+
+        function saveRecord() {
+            if (selectedEmotionIds.size === 0) {
+                showToast('感情を少なくとも1つ選択してください');
+                return;
+            }
+
+            const memo = document.getElementById('memo-input').value.trim();
+            const now = new Date();
+            const timestamp = now.toLocaleString('ja-JP', { 
+                year: 'numeric', month: '2-digit', day: '2-digit', 
+                hour: '2-digit', minute: '2-digit' 
+            });
+
+            const record = {
+                id: Date.now(),
+                timestamp: timestamp,
+                emotions: Array.from(selectedEmotionIds).map(id => {
+                    const e = EMOTIONS.find(item => item.id === id);
+                    return { id: e.id, name: e.name, color: e.color, icon: e.icon };
+                }),
+                memo: memo
+            };
+
+            const history = JSON.parse(localStorage.getItem('emotion_history') || '[]');
+            history.unshift(record);
+            localStorage.setItem('emotion_history', JSON.stringify(history));
+
+            clearSelectedEmotions();
+            document.getElementById('memo-input').value = '';
+
+            showToast('感情の記録を保存しました');
+        }
+
+        function loadHistory() {
+            const container = document.getElementById('history-list');
+            const history = JSON.parse(localStorage.getItem('emotion_history') || '[]');
+            container.innerHTML = '';
+
+            if (history.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-12 text-gray-400 space-y-2">
+                        <i data-lucide="inbox" class="w-8 h-8 mx-auto opacity-50"></i>
+                        <p class="text-xs">まだ記録がありません</p>
+                    </div>
+                `;
+                refreshIcons();
+                return;
+            }
+
+            history.forEach(item => {
+                const card = document.createElement('div');
+                card.className = "bg-white p-4 rounded-2xl border border-iosBorder ios-shadow space-y-2 relative";
+
+                const emotionBadges = item.emotions.map(e => `
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold ${e.color} border">
+                        <i data-lucide="${e.icon}" class="w-3 h-3"></i>
+                        ${e.name}
+                    </span>
+                `).join(' ');
+
+                card.innerHTML = `
+                    <div class="flex items-center justify-between text-xs text-gray-400">
+                        <span class="font-medium">${item.timestamp}</span>
+                        <button onclick="deleteHistoryItem(${item.id})" class="text-gray-300 hover:text-red-500 p-1 transition">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 pt-0.5">
+                        ${emotionBadges}
+                    </div>
+                    ${item.memo ? `<p class="text-xs text-gray-700 bg-gray-50 p-2.5 rounded-xl mt-2 leading-relaxed">${escapeHtml(item.memo)}</p>` : ''}
+                `;
+                container.appendChild(card);
+            });
+            refreshIcons();
+        }
+
+        function deleteHistoryItem(id) {
+            let history = JSON.parse(localStorage.getItem('emotion_history') || '[]');
+            history = history.filter(item => item.id !== id);
+            localStorage.setItem('emotion_history', JSON.stringify(history));
+            loadHistory();
+            showToast('履歴を削除しました');
+        }
+
+        function clearAllHistory() {
+            if (confirm('すべての履歴を削除しますか？')) {
+                localStorage.removeItem('emotion_history');
+                loadHistory();
+                showToast('すべての履歴を削除しました');
+            }
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-message').innerText = msg;
+            toast.classList.remove('opacity-0', 'pointer-events-none');
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'pointer-events-none');
+            }, 3000);
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/[&<>"']/g, function(m) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+            });
+        }
+    </script>
+</body>
+</html>
